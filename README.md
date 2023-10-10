@@ -19,3 +19,4 @@ One can create a job by sending body in json
 
 all other routes can be used to do crud operations on database.
 have to strengthen communication channel to the client.
+![IMG-4224](https://github.com/talktovikas/TheServerarium/assets/139783200/c3ac89e4-8d12-48f3-b5e3-070b1724bc22)
