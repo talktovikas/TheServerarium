@@ -9,6 +9,7 @@ services:
         DATABASE_URL: "host=go_db user=postgres password=postgres dbname =postgres sslmode=disable"
     ports:
       - "5199:5199"
+      - "5399:5299"
     depends_on:
       - go_db
   go_db:

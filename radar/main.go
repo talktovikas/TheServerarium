@@ -6,7 +6,8 @@ import (
 	"log"
 	"net/http"
 	"os" //This is Nice
-
+    "fmt"
+	"bytes"
 	"github.com/gorilla/mux" //	This is for creating meaningful routes
 	_ "github.com/lib/pq"
 	//	For making connection to the Postgres{Maybe inside docker}
@@ -49,6 +50,57 @@ func jsonContentTypeMiddleware(next http.Handler) http.Handler {
 // and send it again if it didn't get the ack. and again and again. Let's say 20 times in 5 minutes.
 // ? and maybe decide that client is not connected.
 
+
+func signalClient(job Job) bool{
+    fmt.Println("---------------------------------")
+    fmt.Println("----SENDING REQUEST TO CLIENT----")
+    fmt.Println("---------------------------------")
+    requestBody, err := json.Marshal(job)
+	if err != nil {
+		fmt.Println("Error marshaling JSON:", err)
+		return false
+	}
+	url 			 := "http://localhost:5299/doexecute"
+	fmt.Println("Sending Body of %v",requestBody)
+	resp, err := sendPOSTRequest(url, requestBody)
+	if err != nil {
+		fmt.Println("Error:", err)  // This has to be fixed.
+		return false
+	}
+	defer resp.Body.Close()
+
+		// Check the response
+		if resp.StatusCode == http.StatusOK {
+			fmt.Println("Request was successful")
+			return true
+
+		} else {
+			fmt.Println("Request failed with status code:", resp.Status)
+			return false
+		}
+}
+
+func sendPOSTRequest(url string, body []byte) (*http.Response, error) {
+    // Create an HTTP request
+    req, err := http.NewRequest("POST", url, bytes.NewBuffer(body))
+    if err != nil {
+        return nil, err
+    }
+
+    // Set the HTTP version to 1.1 and add headers as needed
+    req.Proto = "HTTP/1.1"
+    req.Header.Add("Content-Type", "application/json")
+    // Add other headers as required
+
+    // Send the request
+    client := &http.Client{}
+    resp, err := client.Do(req)
+    if err != nil {
+        return nil, err
+    }
+
+    return resp, nil
+}
 //------------------------------------------------------------------------------------------------
 //							Create a New Job { Route Request Handler }
 //------------------------------------------------------------------------------------------------
@@ -103,6 +155,7 @@ func createjob(db *sql.DB) http.HandlerFunc {
 		if err != nil {
 			log.Fatal(err)
 		}
+		go signalClient(job)  // The Async Call to call the client.
 		json.NewEncoder(w).Encode(job)
 	}
 }
