@@ -8,6 +8,8 @@ import (
 	"os" //This is Nice
     "fmt"
 	"bytes"
+	"time"
+	"strconv"
 	"github.com/gorilla/mux" //	This is for creating meaningful routes
 	_ "github.com/lib/pq"
 	//	For making connection to the Postgres{Maybe inside docker}
@@ -50,6 +52,69 @@ func jsonContentTypeMiddleware(next http.Handler) http.Handler {
 // and send it again if it didn't get the ack. and again and again. Let's say 20 times in 5 minutes.
 // ? and maybe decide that client is not connected.
 
+func makeschedule(databaselink *sql.DB,job Job,seconds int64) bool{
+	fmt.Println("Scheduling this after %d seconds",seconds)
+	time.Sleep(time.Duration(seconds) * time.Second)
+	return signalClient(job)
+}
+func updatestatusofjob(reply bool,database *sql.DB,job Job){
+	if reply == false{
+		fmt.Println("Client was not able to perform the job")
+		return
+	}
+	_, err := database.Exec("update job_table SET isdone = true where id = $1", job.ID)
+	if err != nil {
+		log.Fatal(err)
+	}
+}
+
+//decide when to send the signal to the client.
+func decidewhentosendsignal(databaselink *sql.DB,job Job){
+	Timestamp 	:= job.Timestamp
+	seconds,err := howmuchfutureinseconds(Timestamp)
+	if err != nil {
+		fmt.Println("Not Sending the request to client, Not able to parse Timestamp")
+		return
+	}
+	if seconds ==0{
+		fmt.Println("Not Sending the request to client, Since Timestamp Expired")
+		return
+	}
+    ReplyfromClient := makeschedule(databaselink , job , seconds )
+	updatestatusofjob(ReplyfromClient,databaselink,job)
+	//now on the basis of reply from client, decide changing the parameters.
+}
+func howmuchfutureinseconds(timestamp string)(int64,error){
+	timestampMilliseconds, err := strconv.ParseInt(timestamp, 10, 64)
+	if err != nil {
+		return 0, err
+	}
+	// Convert the timestamp to a time.Time object
+	timestampTime := time.Unix(0, timestampMilliseconds*int64(time.Millisecond))
+
+	// Get the current time
+	currentTime := time.Now()
+
+	// Calculate the time difference in seconds
+	diff := timestampTime.Sub(currentTime)
+	secondsDifference := int64(diff.Seconds())
+
+	return secondsDifference, nil
+}
+
+//this function is will check, if we can accept a job for our db.
+func isthisfuturetime(timeInMilliseconds string) bool{
+	// Convert the time in milliseconds to an integer
+	milliseconds, err := strconv.ParseInt(timeInMilliseconds, 10, 64)
+	if err != nil {
+		fmt.Println("Error:", err)
+		return false // You can choose the appropriate behavior for your use case
+	}
+	t := time.Unix(0, milliseconds*int64(time.Millisecond))
+	currentTime := time.Now()
+	return t.After(currentTime)
+}
+
 
 func signalClient(job Job) bool{
     fmt.Println("---------------------------------")
@@ -60,7 +125,7 @@ func signalClient(job Job) bool{
 		fmt.Println("Error marshaling JSON:", err)
 		return false
 	}
-	url 			 := "http://localhost:5299/doexecute"
+	url 			 := "http://192.168.1.6:5299/doexecute"
 	fmt.Println("Sending Body of %v",requestBody)
 	resp, err := sendPOSTRequest(url, requestBody)
 	if err != nil {
@@ -151,11 +216,20 @@ func createjob(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var job Job
 		json.NewDecoder(r.Body).Decode(&job)
+		Flag := isthisfuturetime(job.Timestamp)
+		if job.IsDone{
+			http.Error(w, "Marking true is the server work, Please make it false and try again.", http.StatusBadRequest)
+			return
+		}
+		if !Flag {
+			http.Error(w, "Past Jobs can't be accepted", http.StatusBadRequest)
+			return
+		}
 		err := db.QueryRow("INSERT into job_table (timestamp, isdone) values ($1 ,$2) RETURNING id", job.Timestamp, job.IsDone).Scan(&job.ID)
 		if err != nil {
 			log.Fatal(err)
 		}
-		go signalClient(job)  // The Async Call to call the client.
+		go decidewhentosendsignal(db,job)  // The Async Call to call the client.
 		json.NewEncoder(w).Encode(job)
 	}
 }
@@ -165,6 +239,15 @@ func updatejob(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var job Job
 		json.NewDecoder(r.Body).Decode(&job)
+		Flag := isthisfuturetime(job.Timestamp)
+		if job.IsDone{
+			http.Error(w, "Marking true is the server work, Please make it false and try again.", http.StatusBadRequest)
+			return
+		}
+		if !Flag {
+			http.Error(w, "Past Jobs can't be accepted", http.StatusBadRequest)
+			return
+		}
 		vars := mux.Vars(r)
 		id := vars["id"]
 		_, err := db.Exec("update job_table SET timestamp = $1, isdone = $2 where id = $3", job.Timestamp, job.IsDone, id) // Is this correct representation ?
